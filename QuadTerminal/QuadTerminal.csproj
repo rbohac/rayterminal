@@ -7,9 +7,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>QuadTerminal</AssemblyName>
     <RootNamespace>QuadTerminal</RootNamespace>
+    <ApplicationIcon>claude-color.ico</ApplicationIcon>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="claude-color.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="Resources\terminal.ico" Condition="Exists('Resources\terminal.ico')" />

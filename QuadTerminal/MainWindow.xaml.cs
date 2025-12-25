@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Drawing;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using Forms = System.Windows.Forms;
 
 namespace QuadTerminal;
 
@@ -16,38 +18,105 @@ public partial class MainWindow : Window
     private const string TerminalWindowClass = "CASCADIA_HOSTING_WINDOW_CLASS";
     private IntPtr _terminalHwnd = IntPtr.Zero;
     private DispatcherTimer? _windowMonitor;
+    private Forms.NotifyIcon? _trayIcon;
+    private bool _reallyClosing = false;
+    private bool _closeFromTaskbar = false;
 
     public MainWindow()
     {
         InitializeComponent();
+        InitializeTrayIcon();
+    }
+
+    private void InitializeTrayIcon()
+    {
+        _trayIcon = new Forms.NotifyIcon
+        {
+            Text = "QuadTerminal",
+            Visible = true
+        };
+
+        // Try to load the app icon, fallback to system icon
+        try
+        {
+            var iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "claude-color.ico");
+            if (System.IO.File.Exists(iconPath))
+                _trayIcon.Icon = new Icon(iconPath);
+            else
+                _trayIcon.Icon = SystemIcons.Application;
+        }
+        catch
+        {
+            _trayIcon.Icon = SystemIcons.Application;
+        }
+
+        // Double-click to show window
+        _trayIcon.DoubleClick += (s, e) => ShowWindow();
+
+        // Context menu
+        var contextMenu = new Forms.ContextMenuStrip();
+        contextMenu.Items.Add("Show", null, (s, e) => ShowWindow());
+        contextMenu.Items.Add("Reset Terminal", null, (s, e) => ResetTerminal());
+        contextMenu.Items.Add("-"); // Separator
+        contextMenu.Items.Add("Exit", null, (s, e) => ExitApplication());
+        _trayIcon.ContextMenuStrip = contextMenu;
+    }
+
+    private void ShowWindow()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void ExitApplication()
+    {
+        _reallyClosing = true;
+        Close();
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        // Hook into window messages to detect close source
+        var hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        hwndSource?.AddHook(WndProc);
+
         await LaunchAndEmbedTerminal();
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_SYSCOMMAND = 0x0112;
+        const int SC_CLOSE = 0xF060;
+
+        if (msg == WM_SYSCOMMAND && (wParam.ToInt32() & 0xFFF0) == SC_CLOSE)
+        {
+            // lParam = 0 means close from taskbar/keyboard (Alt+F4)
+            // lParam != 0 means close from X button (contains screen coordinates)
+            _closeFromTaskbar = (lParam == IntPtr.Zero);
+        }
+
+        return IntPtr.Zero;
     }
 
     private async Task LaunchAndEmbedTerminal()
     {
+        LoadingText.Text = "Starting terminal...";
+        LoadingText.Visibility = Visibility.Visible;
+
         // Build the WT command for 4 CMD panes in 2x2 grid
-        // 1. Open first pane (top-left)
-        // 2. Split horizontally -> top and bottom, focus on bottom
-        // 3. Move focus up to top pane
-        // 4. Split vertically -> top-left and top-right
-        // 5. Move focus down to bottom pane
-        // 6. Split vertically -> bottom-left and bottom-right
         string Pane(string name) => $"--title {name} cmd /k \"echo === {name} === && cd /d K: && wsl\"";
         string wtArgs = $"--focus {Pane("P1")} ; " +
-                        $"split-pane -H {Pane("P3")} ; " +
-                        "mf up ; " +
                         $"split-pane -V {Pane("P2")} ; " +
-                        "mf down ; " +
-                        $"split-pane -V {Pane("P4")}";
+                        "mf left ; " +
+                        $"split-pane -H {Pane("P3")} ; " +
+                        "mf right ; " +
+                        $"split-pane -H {Pane("P4")}";
 
-        // 1. Snapshot existing Windows Terminal windows BEFORE launching
+        // Snapshot existing Windows Terminal windows BEFORE launching
         var existingWindows = GetExistingTerminalWindows();
 
-        // 2. Launch wt.exe (fire and forget - it's a shim that exits immediately)
+        // Launch wt.exe (fire and forget - it's a shim that exits immediately)
         try
         {
             Process.Start(new ProcessStartInfo
@@ -59,24 +128,29 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Failed to start Windows Terminal.\n\nIs it installed?\n\nError: {ex.Message}",
+            System.Windows.MessageBox.Show($"Failed to start Windows Terminal.\n\nIs it installed?\n\nError: {ex.Message}",
                 "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            _reallyClosing = true;
             Close();
             return;
         }
 
-        // 3. Wait for a NEW Windows Terminal window to appear
+        // Give WT time to process all split-pane commands
+        await Task.Delay(800);
+
+        // Wait for a NEW Windows Terminal window to appear
         _terminalHwnd = await WaitForNewTerminalWindow(existingWindows, timeoutMs: 10000);
 
         if (_terminalHwnd == IntPtr.Zero)
         {
-            MessageBox.Show("Windows Terminal window not found.\n\nThe process started but no window appeared.",
+            System.Windows.MessageBox.Show("Windows Terminal window not found.\n\nThe process started but no window appeared.",
                 "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            _reallyClosing = true;
             Close();
             return;
         }
 
-        // Give the window a moment to fully initialize
+        // Small delay for window to stabilize before embedding
         await Task.Delay(300);
 
         // Embed the terminal window
@@ -87,6 +161,14 @@ public partial class MainWindow : Window
 
         // Hide loading text
         LoadingText.Visibility = Visibility.Collapsed;
+    }
+
+    private async void ResetTerminal()
+    {
+        // Close current terminal and launch a new one
+        CloseEmbeddedTerminal();
+        await Task.Delay(300);
+        await LaunchAndEmbedTerminal();
     }
 
     private void StartWindowMonitor()
@@ -101,6 +183,8 @@ public partial class MainWindow : Window
             {
                 _windowMonitor.Stop();
                 _terminalHwnd = IntPtr.Zero;
+                // Terminal closed - really exit the app
+                _reallyClosing = true;
                 Close();
             }
         };
@@ -191,10 +275,21 @@ public partial class MainWindow : Window
         }
     }
 
+    private void CloseEmbeddedTerminal()
+    {
+        if (_terminalHwnd != IntPtr.Zero)
+        {
+            // Unparent before destroying
+            NativeMethods.SetParent(_terminalHwnd, IntPtr.Zero);
+            NativeMethods.DestroyWindow(_terminalHwnd);
+            _terminalHwnd = IntPtr.Zero;
+        }
+    }
+
     private void Label_GotFocus(object sender, RoutedEventArgs e)
     {
         // Select all text when the label is focused for easy editing
-        if (sender is TextBox textBox)
+        if (sender is System.Windows.Controls.TextBox textBox)
         {
             textBox.SelectAll();
         }
@@ -207,7 +302,23 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object sender, CancelEventArgs e)
     {
-        // Stop the window monitor
-        _windowMonitor?.Stop();
+        // Close if: _reallyClosing (tray Exit, terminal closed) OR taskbar "Close window"
+        if (_reallyClosing || _closeFromTaskbar)
+        {
+            // Actually closing - clean up
+            _windowMonitor?.Stop();
+
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+                _trayIcon = null;
+            }
+            return;
+        }
+
+        // X button clicked - minimize to tray instead
+        e.Cancel = true;
+        Hide();
     }
 }
