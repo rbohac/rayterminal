@@ -56,6 +56,7 @@ public partial class MainWindow : Window
         // Context menu
         var contextMenu = new Forms.ContextMenuStrip();
         contextMenu.Items.Add("Show", null, (s, e) => ShowWindow());
+        contextMenu.Items.Add("Center on Primary", null, (s, e) => CenterOnPrimary());
         contextMenu.Items.Add("Reset Terminal", null, (s, e) => ResetTerminal());
         contextMenu.Items.Add("-"); // Separator
         contextMenu.Items.Add("Exit", null, (s, e) => ExitApplication());
@@ -66,6 +67,30 @@ public partial class MainWindow : Window
     {
         Show();
         WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void CenterOnPrimary()
+    {
+        // Get primary screen work area (excludes taskbar)
+        var primaryScreen = Forms.Screen.PrimaryScreen;
+        if (primaryScreen == null) return;
+
+        var workArea = primaryScreen.WorkingArea;
+
+        // Restore to normal state first (in case maximized or minimized)
+        Show();
+        WindowState = WindowState.Normal;
+
+        // Calculate center position
+        double left = workArea.Left + (workArea.Width - Width) / 2;
+        double top = workArea.Top + (workArea.Height - Height) / 2;
+
+        // Move window
+        Left = left;
+        Top = top;
+
+        // Activate
         Activate();
     }
 
