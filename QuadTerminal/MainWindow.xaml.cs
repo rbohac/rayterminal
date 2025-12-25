@@ -37,7 +37,7 @@ public partial class MainWindow : Window
         // 5. Move focus down to bottom pane
         // 6. Split vertically -> bottom-left and bottom-right
         string Pane(string name) => $"--title {name} cmd /k \"echo === {name} === && cd /d K: && wsl\"";
-        string wtArgs = $"{Pane("P1")} ; " +
+        string wtArgs = $"--focus {Pane("P1")} ; " +
                         $"split-pane -H {Pane("P3")} ; " +
                         "mf up ; " +
                         $"split-pane -V {Pane("P2")} ; " +
